@@ -8,6 +8,7 @@ import numpy as np
 
 from config import SHAPENET_IM
 from loader import read_camera, read_depth, read_im, read_quat, read_vol
+from custom_db import *
 
 
 def get_split(split_js='data/splits.json'):
@@ -25,7 +26,8 @@ class ShapeNet(object):
                  vox_dir=None,
                  shape_ids=None,
                  num_renders=20,
-                 rng_seed=0):
+                 rng_seed=0,
+                 custom_db=False):
         self.vox_dir = vox_dir
         self.im_dir = im_dir
         self.split_file = split_file
@@ -39,21 +41,80 @@ class ShapeNet(object):
         ]
         self.rng = rng_seed
         self.num_renders = num_renders
-        self.load_func = {
-            'im': self.get_im,
-            'depth': self.get_depth,
-            'K': self.get_K,
-            'R': self.get_R,
-            'quat': self.get_quat,
-            'vol': self.get_vol,
-            'shape_id': self.get_sid,
-            'model_id': self.get_mid,
-            'view_idx': self.get_view_idx
-        }
+        if custom_db:
+            self.load_func = {
+                'im': self.get_im_custom,
+                'depth': self.get_depth_custom,
+                'K': self.get_K_custom,
+                'R': self.get_R_custom,
+                'quat': self.get_quat,
+                'vol': self.get_vol,
+                'shape_id': self.get_sid,
+                'model_id': self.get_mid,
+                'view_idx': self.get_view_idx
+            }
+        else:
+            self.load_func = {
+                'im': self.get_im,
+                'depth': self.get_depth,
+                'K': self.get_K,
+                'R': self.get_R,
+                'quat': self.get_quat,
+                'vol': self.get_vol,
+                'shape_id': self.get_sid,
+                'model_id': self.get_mid,
+                'view_idx': self.get_view_idx
+            }
+
         self.all_items = self.load_func.keys()
 
         self.logger = logging.getLogger('mview3d.' + __name__)
         np.random.seed(self.rng)
+
+    # custom training functions
+    def read_camera_custom(self, f):
+        cam = json.load(open(f))
+        R = np.array(cam['R'])
+        t = np.array(cam['t']).reshape(3,1)
+        Rt = np.hstack((R,t))
+        K = np.array(cam['K'])
+        return K, Rt
+
+    def get_K_custom(self, sid, mid, idx):
+        rand_idx = idx
+        cams = []
+        for ix in rand_idx:
+            f = osp.join(self.im_dir, sid, mid, '{:d}.json'.format(ix))
+            cams.append(self.read_camera_custom(f))
+        camK = np.stack([c[0] for c in cams], axis=0)
+        return camK
+
+    def get_R_custom(self, sid, mid, idx):
+        rand_idx = idx
+        cams = []
+        for ix in rand_idx:
+            f = osp.join(self.im_dir, sid, mid, '{:d}.json'.format(ix))
+            cams.append(self.read_camera_custom(f))
+        camR = np.stack([c[1] for c in cams], axis=0)
+        return camR
+
+    def get_depth_custom(self, sid, mid, idx):
+        rand_idx = idx
+        depths = []
+        for ix in rand_idx:
+            f = osp.join(self.im_dir, sid, mid, '{:d}_depthmap.png'.format(ix))
+            depths.append(read_depth(f))
+        return np.stack(depths, axis=0)
+
+    def get_im_custom(self, sid, mid, idx):
+        rand_idx = idx
+        ims = []
+        for ix in rand_idx:
+            f = osp.join(self.im_dir, sid, mid, '{:d}.png'.format(ix))
+            ims.append(read_im(f))
+        return np.stack(ims, axis=0)
+
+    ################################################
 
     def get_mids(self, sid):
         return self.splits[sid]
@@ -144,6 +205,25 @@ class ShapeNet(object):
                 if self.loop_data:
                     self.queue_idx.put(data_idx)
 
+    def fetch_data_single_thread(self, smids, items, im_batch):
+        data = {}
+        try:
+            data_idx = self.queue_idx.get(timeout=0.5)
+        except Empty:
+            self.logger.debug('Index queue empty - {:s}'.format(
+                current_thread().name))
+            return
+
+        view_idx = np.random.choice(
+            self.num_renders, size=(im_batch, ), replace=False)
+        sid, mid = smids[data_idx]
+        for i in items:
+            data[i] = self.load_func[i](sid, mid, view_idx)
+
+        self.queue_data.put(data)
+        if self.loop_data:
+            self.queue_idx.put(data_idx)
+
     def init_queue(self,
                    smids,
                    im_batch,
@@ -174,6 +254,9 @@ class ShapeNet(object):
             worker.start()
             self.coord.register_thread(worker)
             self.qthreads.append(worker)
+
+        # self.fetch_data_single_thread(smids, items, im_batch)
+
 
     def close_queue(self, e=None):
         self.logger.debug('Closing queue')

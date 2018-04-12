@@ -7,7 +7,7 @@ from pprint import pprint
 import tensorflow as tf
 from tqdm import tqdm
 
-from config import SHAPENET_IM
+from config import SHAPENET_IM, CUSTOM_SPLIT_JSON, CUSTOM_SHAPENET_IM
 from models import grid_nets, im_nets, model_dlsm
 from mvnet import MVNet
 from ops import (conv_rnns, depth_sum, image_sum, loss_l1, repeat_tensor,
@@ -15,6 +15,7 @@ from ops import (conv_rnns, depth_sum, image_sum, loss_l1, repeat_tensor,
 from shapenet import ShapeNet
 from utils import (Timer, get_session_config, init_logging, mkdir_p,
                    process_args, write_args)
+from custom_db import prepare_custom_db
 
 
 def train(net):
@@ -55,7 +56,8 @@ def train(net):
 
     # Initialize dataset
     coord = tf.train.Coordinator()
-    dset = ShapeNet(im_dir=im_dir, split_file=args.split_file, rng_seed=0)
+    dset = ShapeNet(im_dir=im_dir, split_file=args.split_file,
+                    rng_seed=0, custom_db=args.custom_training)
     mids = dset.get_smids('train')
     logger.info('Training with %d models', len(mids))
     items = ['im', 'K', 'R', 'depth']
@@ -138,6 +140,7 @@ def train(net):
 def parse_args():
     parser = argparse.ArgumentParser(description='Options for MVNet')
     parser.add_argument('--argsjs', type=str, default=None)
+    parser.add_argument('--custom_training', type=str, default=True)
     parser.add_argument('--logdir', type=str, default='./log')
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--loglevel', type=str, default='info')
@@ -161,7 +164,7 @@ def parse_args():
     parser.add_argument('--decay_rate', type=float, default=1)
     parser.add_argument('--decay_steps', type=int, default=10000)
     parser.add_argument('--beta1', type=float, default=0.9)
-    parser.add_argument('--niters', type=int, default=10000)
+    parser.add_argument('--niters', type=int, default=100000)
     parser.add_argument('--sum_iters', type=int, default=50)
     parser.add_argument('--ckpt_iters', type=int, default=5000)
     parser.add_argument('--im_skip', action="store_true")
@@ -174,10 +177,26 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
+    custom_split = 'train'
+    split_save_path = CUSTOM_SPLIT_JSON
+    im_dir = CUSTOM_SHAPENET_IM
+
+    # if custom_db path is used
+    if args.custom_training:
+        prepare_custom_db(split_save_path, im_dir, custom_split)
+        args.split_file = split_save_path
+        args.batch_size = 2
+        args.niters = 400000
+        args.im_skip = True
+        args.run_trace = False
+        args.sepup = True
+        # args.decay_steps = 10000*3
+
+
+
     key = time.strftime("%Y-%m-%d_%H%M%S")
     init_logging(args.loglevel)
     logger = logging.getLogger('mview3d.' + __name__)
-    im_dir = SHAPENET_IM
 
     if args.ckpt is None:
         log_dir = osp.join(args.logdir, key, 'train')

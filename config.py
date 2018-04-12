@@ -9,3 +9,6 @@ SHAPENET_VOX = {
 }
 
 SHAPENET_IM = os.path.join(BASE_DIR, 'data/shapenet_release/renders')
+CUSTOM_SHAPENET_IM = os.path.join(BASE_DIR, 'data/rendered_images')
+CUSTOM_SPLIT_JSON = os.path.join(BASE_DIR, 'data/custom_split.json')
+

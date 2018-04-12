@@ -18,6 +18,8 @@ def read_im(f):
 
 def read_depth(f):
     im = skimage.img_as_float(imread(f)) * 10
+    if im.ndim > 2:
+        im = im[:,:,0]
     if im.ndim == 2:
         im = np.expand_dims(im, 2)
     return im
